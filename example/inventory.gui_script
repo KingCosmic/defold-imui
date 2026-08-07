@@ -1,0 +1,673 @@
+local ui = require "imui.imui"
+
+local SCREEN_BACKGROUND = vmath.vector4(0.035, 0.042, 0.055, 1)
+local PANEL_BACKGROUND = vmath.vector4(0.075, 0.086, 0.11, 1)
+local VIEWPORT_BACKGROUND = vmath.vector4(0.052, 0.06, 0.078, 1)
+
+local SLOT_BACKGROUND = vmath.vector4(0.13, 0.145, 0.18, 1)
+local SLOT_HOVER = vmath.vector4(0.19, 0.21, 0.26, 1)
+local SLOT_SELECTED = vmath.vector4(0.40, 0.27, 0.72, 1)
+local SLOT_SELECTED_HOVER = vmath.vector4(0.49, 0.34, 0.82, 1)
+
+local BUTTON_BACKGROUND = vmath.vector4(0.20, 0.22, 0.27, 1)
+local BUTTON_HOVER = vmath.vector4(0.27, 0.29, 0.35, 1)
+local BUTTON_DISABLED = vmath.vector4(0.12, 0.13, 0.16, 1)
+
+local TAKE_BUTTON = vmath.vector4(0.20, 0.34, 0.25, 1)
+local TAKE_BUTTON_HOVER = vmath.vector4(0.26, 0.44, 0.32, 1)
+
+local DROP_BUTTON = vmath.vector4(0.38, 0.24, 0.18, 1)
+local DROP_BUTTON_HOVER = vmath.vector4(0.48, 0.31, 0.22, 1)
+
+local TEXT_PRIMARY = vmath.vector4(0.95, 0.96, 1, 1)
+local TEXT_SECONDARY = vmath.vector4(0.65, 0.68, 0.75, 1)
+
+
+-- ---------------------------------------------------------------------------
+-- Demo inventory data
+-- ---------------------------------------------------------------------------
+
+local function add_item(self, container_id, name, quantity)
+	self.next_item_id = self.next_item_id + 1
+
+	local item = {
+		id = self.next_item_id,
+		container_id = container_id,
+		name = name,
+		quantity = quantity or 1,
+	}
+
+	self.items[item.id] = item
+
+	return item
+end
+
+local function get_container_items(self, container_id)
+	local result = {}
+
+	for _, item in pairs(self.items) do
+		if item.container_id == container_id then
+			result[#result + 1] = item
+		end
+	end
+
+	-- Gives the grid a deterministic order while items move
+	-- between containers.
+	table.sort(result, function(a, b)
+		return a.id < b.id
+	end)
+
+	return result
+end
+
+local function get_selected_item(self)
+	if not self.selected_item_id then
+		return nil
+	end
+
+	return self.items[self.selected_item_id]
+end
+
+local function transfer_item(self, item_id, destination_container_id)
+	local item = self.items[item_id]
+
+	if not item then
+		return false
+	end
+
+	if not self.containers[destination_container_id] then
+		return false
+	end
+
+	if item.container_id == destination_container_id then
+		return false
+	end
+
+	-- Replace this assignment with your container transfer command later:
+	--
+	-- world_commands.queue({
+	--     type = "transfer_item",
+	--     item_id = item_id,
+	--     destination_container_id = destination_container_id,
+	-- })
+	item.container_id = destination_container_id
+
+	return true
+end
+
+local function transfer_all(
+	self,
+	source_container_id,
+	destination_container_id
+)
+	local transferred = 0
+
+	for _, item in pairs(self.items) do
+		if item.container_id == source_container_id then
+			item.container_id = destination_container_id
+			transferred = transferred + 1
+		end
+	end
+
+	return transferred
+end
+
+local function populate_demo(self)
+	self.items = {}
+	self.next_item_id = 0
+	self.selected_item_id = nil
+	self.spawn_index = 0
+
+	-- Player inventory
+	add_item(self, "player", "Bandage", 3)
+	add_item(self, "player", "Water", 2)
+	add_item(self, "player", "9mm Ammo", 24)
+	add_item(self, "player", "Canned Beans", 2)
+	add_item(self, "player", "Flashlight", 1)
+	add_item(self, "player", "Batteries", 4)
+	add_item(self, "player", "Pocket Knife", 1)
+	add_item(self, "player", "Ripped Cloth", 6)
+	add_item(self, "player", "Painkillers", 2)
+	add_item(self, "player", "Matches", 8)
+	add_item(self, "player", "Screwdriver", 1)
+	add_item(self, "player", "Empty Bottle", 2)
+
+	-- Nearby cabinet/container
+	add_item(self, "container", "Canned Soup", 4)
+	add_item(self, "container", "Cooking Pot", 1)
+	add_item(self, "container", "Duct Tape", 2)
+	add_item(self, "container", "Garbage Bag", 3)
+	add_item(self, "container", "Bleach", 1)
+	add_item(self, "container", "Kitchen Knife", 1)
+	add_item(self, "container", "Salt", 2)
+	add_item(self, "container", "Coffee", 1)
+	add_item(self, "container", "Lighter", 1)
+
+	-- Loose items on the ground
+	add_item(self, "ground", "Loose Nails", 12)
+	add_item(self, "ground", "Wood Plank", 2)
+	add_item(self, "ground", "Dirty Rag", 3)
+	add_item(self, "ground", "Empty Can", 1)
+	add_item(self, "ground", "Shotgun Shells", 6)
+end
+
+local function spawn_ground_loot(self)
+	local loot = {
+		{ "Loose Ammo", 8 },
+		{ "Scrap Metal", 2 },
+		{ "Dirty Water", 1 },
+		{ "Wood Plank", 1 },
+		{ "Ripped Cloth", 3 },
+		{ "Empty Bottle", 1 },
+		{ "Loose Nails", 6 },
+		{ "Canned Food", 1 },
+	}
+
+	self.spawn_index = self.spawn_index + 1
+
+	local entry = loot[((self.spawn_index - 1) % #loot) + 1]
+
+	add_item(
+		self,
+		"ground",
+		entry[1],
+		entry[2]
+	)
+end
+
+
+-- ---------------------------------------------------------------------------
+-- UI helpers
+-- ---------------------------------------------------------------------------
+
+local function draw_action_button(
+	id,
+	label,
+	enabled,
+	background_color,
+	hover_color
+)
+	return ui.button(id, label, {
+		width = "fill",
+		height = 38,
+		grow = 1,
+
+		enabled = enabled,
+
+		background_color = enabled
+			and background_color
+			or BUTTON_DISABLED,
+
+		hover_color = hover_color,
+		pressed_color = background_color,
+
+		padding_x = 8,
+		padding_y = 6,
+	})
+end
+
+local function draw_item_slot(self, item)
+	local selected = self.selected_item_id == item.id
+
+	local label = string.format(
+		"%s\nx%d",
+		item.name,
+		item.quantity
+	)
+
+	if ui.button("item:" .. item.id, label, {
+		width = "fill",
+		height = "fill",
+
+		background_color = selected
+			and SLOT_SELECTED
+			or SLOT_BACKGROUND,
+
+		hover_color = selected
+			and SLOT_SELECTED_HOVER
+			or SLOT_HOVER,
+
+		pressed_color = selected
+			and SLOT_SELECTED
+			or SLOT_BACKGROUND,
+
+		padding_x = 6,
+		padding_y = 6,
+	}) then
+		if selected then
+			self.selected_item_id = nil
+		else
+			self.selected_item_id = item.id
+		end
+	end
+end
+
+local function draw_container_panel(self, config)
+	local container = self.containers[config.container_id]
+
+	local items = get_container_items(self, config.container_id)
+
+	ui.begin_column(config.id, {
+		width = "fill",
+		height = "fill",
+		grow = config.grow or 1,
+
+		padding = 10,
+		gap = 8,
+
+		background_color =
+			config.background_color
+			or PANEL_BACKGROUND,
+	})
+
+	-- Header
+	ui.begin_row("header", {
+		width = "fill",
+		height = 30,
+		gap = 8,
+		align_items = "center",
+	})
+
+	ui.text("title", container.name, {
+		width = "fill",
+		height = 28,
+		grow = 1,
+
+		color = TEXT_PRIMARY,
+		text_scale = config.title_scale or 1,
+	})
+
+	ui.text("capacity", string.format(
+		"%d / %d",
+		#items,
+		container.capacity
+	), {
+		width = 80,
+		height = 24,
+
+		color = TEXT_SECONDARY,
+	})
+
+	ui.end_container() -- header
+
+	-- Scrollable item grid
+	local scroll = ui.begin_scroll("scroll", {
+		width = "fill",
+		height = "fill",
+		grow = 1,
+
+		axis = "vertical",
+		padding = 8,
+		wheel_speed = 56,
+
+		-- Leave room so item buttons do not render beneath
+		-- the overlaid scrollbar.
+		padding_right = 22,
+
+		scrollbar = true,
+		scrollbar_width = 8,
+		scrollbar_margin = 5,
+		scrollbar_min_thumb = 28,
+		scrollbar_hit_padding = 5,
+
+		scrollbar_track_color =
+			vmath.vector4(1, 1, 1, 0.08),
+
+		scrollbar_thumb_color =
+			vmath.vector4(0.48, 0.51, 0.60, 0.72),
+
+		scrollbar_thumb_hover_color =
+			vmath.vector4(0.66, 0.69, 0.79, 0.92),
+
+		scrollbar_thumb_pressed_color =
+			vmath.vector4(0.82, 0.84, 0.92, 1),
+
+		background_color = VIEWPORT_BACKGROUND,
+	})
+
+	if #items == 0 then
+		ui.text("empty", config.empty_text or "Empty", {
+			width = "fill",
+			height = 32,
+
+			color = TEXT_SECONDARY,
+		})
+	else
+		ui.begin_grid("slots", {
+			width = "fill",
+
+			columns = config.columns,
+			cell_height = config.cell_height,
+
+			column_gap = 7,
+			row_gap = 7,
+
+			justify_items = "stretch",
+			align_items = "stretch",
+		})
+
+		for _, item in ipairs(items) do
+			draw_item_slot(self, item)
+		end
+
+		ui.end_container() -- slots
+	end
+
+	ui.end_container() -- scroll
+
+	ui.text("scroll_debug", string.format(
+		"scroll %.0f / %.0f | content %.0f | viewport %.0f",
+		scroll.y,
+		scroll.max_y,
+		scroll.content_height,
+		scroll.viewport_height
+	), {
+		width = "fill",
+		height = 22,
+		color = TEXT_SECONDARY,
+	})
+
+	-- Transfer controls
+	ui.begin_row("actions", {
+		width = "fill",
+		height = 38,
+		gap = 7,
+		align_items = "center",
+	})
+
+	for _, action in ipairs(config.actions) do
+		local selected = get_selected_item(self)
+
+		local selected_here =
+			selected
+			and selected.container_id
+			== config.container_id
+
+		local enabled
+
+		if action.mode == "all" then
+			enabled = #items > 0
+		else
+			enabled = selected_here == true
+		end
+
+		local clicked = draw_action_button(
+			action.id,
+			action.label,
+			enabled,
+			action.background_color
+			or BUTTON_BACKGROUND,
+			action.hover_color
+			or BUTTON_HOVER
+		)
+
+		if clicked then
+			if action.mode == "all" then
+				transfer_all(
+					self,
+					config.container_id,
+					action.destination_id
+				)
+			elseif selected_here then
+				transfer_item(
+					self,
+					selected.id,
+					action.destination_id
+				)
+			end
+		end
+	end
+
+	ui.end_container() -- actions
+	ui.end_container() -- panel
+end
+
+
+-- ---------------------------------------------------------------------------
+-- Defold lifecycle
+-- ---------------------------------------------------------------------------
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+
+	self.containers = {
+		player = {
+			id = "player",
+			name = "Backpack",
+			capacity = 40,
+		},
+
+		container = {
+			id = "container",
+			name = "Kitchen Cabinet",
+			capacity = 24,
+		},
+
+		ground = {
+			id = "ground",
+			name = "Nearby Ground",
+			capacity = 100,
+		},
+	}
+
+	populate_demo(self)
+
+	self.ui = ui.create({
+		font = "default",
+
+		pointer_action = hash("touch"),
+
+		scroll_up_action = hash("mouse_wheel_up"),
+
+		scroll_down_action = hash("mouse_wheel_down"),
+
+		scroll_wheel_speed = 56,
+	})
+end
+
+function update(self, dt)
+	ui.begin_frame(self.ui, dt)
+
+	ui.begin_column("screen", {
+		width = "fill",
+		height = "fill",
+
+		padding = 20,
+		gap = 12,
+
+		background_color = SCREEN_BACKGROUND,
+	})
+
+-- Top toolbar
+	ui.begin_row("toolbar", {
+		width = "fill",
+		height = 44,
+		gap = 8,
+		align_items = "center",
+	})
+
+	ui.text("title", "Inventory / Looting", {
+		width = "fill",
+		height = 34,
+		grow = 1,
+
+		color = TEXT_PRIMARY,
+		text_scale = 1.25,
+	})
+
+	if ui.button("spawn_ground", "Spawn Ground Loot", {
+		width = 170,
+		height = 40,
+
+		background_color = BUTTON_BACKGROUND,
+		hover_color = BUTTON_HOVER,
+		pressed_color = BUTTON_BACKGROUND,
+	}) then
+		spawn_ground_loot(self)
+	end
+
+	if ui.button("reset", "Reset", {
+		width = 90,
+		height = 40,
+
+		background_color = BUTTON_BACKGROUND,
+		hover_color = BUTTON_HOVER,
+		pressed_color = BUTTON_BACKGROUND,
+	}) then
+		populate_demo(self)
+	end
+
+	ui.end_container() -- toolbar
+
+	-- Main inventory area
+	ui.begin_row("content", {
+		width = "fill",
+		height = "fill",
+		grow = 1,
+
+		gap = 12,
+		align_items = "stretch",
+	})
+
+	-- Player inventory occupies the larger left side.
+	draw_container_panel(self, {
+		id = "player_panel",
+		container_id = "player",
+
+		grow = 1.35,
+		columns = 5,
+		cell_height = 76,
+
+		actions = {
+			{
+				id = "store",
+				label = "Store",
+				mode = "selected",
+				destination_id = "container",
+			},
+			{
+				id = "drop",
+				label = "Drop",
+				mode = "selected",
+				destination_id = "ground",
+
+				background_color = DROP_BUTTON,
+				hover_color = DROP_BUTTON_HOVER,
+			},
+		},
+	})
+
+	-- Nearby sources are stacked on the right.
+	ui.begin_column("nearby", {
+		width = "fill",
+		height = "fill",
+		grow = 1,
+
+		gap = 12,
+	})
+
+	draw_container_panel(self, {
+		id = "container_panel",
+		container_id = "container",
+
+		grow = 1,
+		columns = 4,
+		cell_height = 64,
+
+		empty_text = "The cabinet is empty.",
+
+		actions = {
+			{
+				id = "take",
+				label = "Take",
+				mode = "selected",
+				destination_id = "player",
+
+				background_color = TAKE_BUTTON,
+				hover_color = TAKE_BUTTON_HOVER,
+			},
+			{
+				id = "take_all",
+				label = "Take All",
+				mode = "all",
+				destination_id = "player",
+
+				background_color = TAKE_BUTTON,
+				hover_color = TAKE_BUTTON_HOVER,
+			},
+		},
+	})
+
+	draw_container_panel(self, {
+		id = "ground_panel",
+		container_id = "ground",
+
+		grow = 0.9,
+		columns = 4,
+		cell_height = 64,
+
+		empty_text = "Nothing useful nearby.",
+
+		actions = {
+			{
+				id = "pick_up",
+				label = "Pick Up",
+				mode = "selected",
+				destination_id = "player",
+
+				background_color = TAKE_BUTTON,
+				hover_color = TAKE_BUTTON_HOVER,
+			},
+			{
+				id = "pick_up_all",
+				label = "Pick Up All",
+				mode = "all",
+				destination_id = "player",
+
+				background_color = TAKE_BUTTON,
+				hover_color = TAKE_BUTTON_HOVER,
+			},
+		},
+	})
+
+	ui.end_container() -- nearby
+	ui.end_container() -- content
+
+	-- Selection status
+	local selected = get_selected_item(self)
+
+	local status
+
+	if selected then
+		local container = self.containers[selected.container_id]
+
+		status = string.format(
+			"Selected: %s x%d  |  %s",
+			selected.name,
+			selected.quantity,
+			container.name
+		)
+	else
+		status = "Select an item to transfer, store, drop, or pick it up."
+	end
+
+	ui.text("selection_status", status, {
+		width = "fill",
+		height = 26,
+
+		color = selected
+		and TEXT_PRIMARY
+		or TEXT_SECONDARY,
+	})
+
+	ui.end_container() -- screen
+	ui.end_frame()
+end
+
+function on_input(self, action_id, action)
+	return ui.on_input(self.ui, action_id, action)
+end
+
+function final(self)
+	ui.destroy(self.ui)
+end

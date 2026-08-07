@@ -1,0 +1,89 @@
+local ui = require "imui.imui"
+
+local SCREEN_BACKGROUND = vmath.vector4(0.055, 0.063, 0.082, 1)
+local PANEL_BACKGROUND = vmath.vector4(0.095, 0.11, 0.145, 1)
+local ACCENT = vmath.vector4(0.43, 0.29, 0.84, 1)
+local ACCENT_HOVER = vmath.vector4(0.53, 0.39, 0.94, 1)
+local ACCENT_PRESSED = vmath.vector4(0.34, 0.22, 0.70, 1)
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+
+	self.count = 0
+	self.ui = ui.create({
+		-- Add a font dependency with this id to the GUI scene.
+		font = "default",
+		pointer_action = hash("touch"),
+		button_color = ACCENT,
+		button_hover_color = ACCENT_HOVER,
+		button_pressed_color = ACCENT_PRESSED,
+	})
+end
+
+function update(self, dt)
+	ui.begin_frame(self.ui, dt)
+
+	ui.begin_column("screen", {
+		width = "fill",
+		height = "fill",
+		padding = 32,
+		gap = 16,
+		background_color = SCREEN_BACKGROUND,
+	})
+
+	ui.text("title", "Defold Immediate UI", {
+		text_scale = 1.35,
+		height = 44,
+	})
+
+	ui.begin_column("panel", {
+		width = 420,
+		padding = 20,
+		gap = 12,
+		background_color = PANEL_BACKGROUND,
+	})
+
+	ui.text("description", "The declarations run every frame. GUI nodes are retained and only changed when their properties differ.", {
+		width = "fill",
+		height = 56,
+		line_break = true,
+	})
+
+	ui.text("count", "Count: " .. self.count, {
+		height = 28,
+	})
+
+	ui.begin_row("buttons", {
+		width = "fill",
+		gap = 10,
+	})
+
+	if ui.button("decrease", "-1", {
+		width = 120,
+		height = 46,
+	}) then
+		self.count = self.count - 1
+	end
+
+	if ui.button("increase", "+1", {
+		width = 120,
+		height = 46,
+	}) then
+		self.count = self.count + 1
+	end
+
+	ui.end_container() -- buttons
+
+	ui.text("extra", "Hey you can create stuff between containers")
+
+	-- automatically closes all open containers.
+	ui.end_frame()
+end
+
+function on_input(self, action_id, action)
+	return ui.on_input(self.ui, action_id, action)
+end
+
+function final(self)
+	ui.destroy(self.ui)
+end
