@@ -22,3 +22,6 @@ scale_mode = stretch
 [project]
 title = imui
 
+[library]
+include_dirs = imui
+
