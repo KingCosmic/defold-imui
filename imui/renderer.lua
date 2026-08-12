@@ -173,6 +173,55 @@ local function set_scale(node, applied, scale)
 	end
 end
 
+local function ensure_drag_preview(context)
+	if context.drag_preview_nodes then
+		return context.drag_preview_nodes
+	end
+
+	local background =
+		new_box("__imui_drag_preview/background")
+
+	gui.set_pivot(
+		background,
+		gui.PIVOT_NW
+	)
+
+	local label =
+		new_text("__imui_drag_preview/label")
+
+	gui.set_pivot(
+		label,
+		gui.PIVOT_CENTER
+	)
+
+	context.drag_preview_nodes = {
+		background = background,
+		label = label,
+	}
+
+	-- They MUST stay at root level or a scroll container
+	-- could clip the preview.
+	gui.set_parent(
+		background,
+		nil,
+		false
+	)
+
+	gui.set_parent(
+		label,
+		nil,
+		false
+	)
+
+	gui.set_enabled(background, false)
+	gui.set_enabled(label, false)
+
+	gui.set_visible(background, false)
+	gui.set_visible(label, false)
+
+	return context.drag_preview_nodes
+end
+
 local function prepare_text(context, command, node, applied, text)
 	local style = command.style
 	local font = style.font or context.defaults.font
@@ -354,6 +403,183 @@ local function append_render_node(context, node, parent)
 	local group = get_render_group(context.current_render_groups, parent)
 	group.count = group.count + 1
 	group.nodes[group.count] = node
+end
+
+local function apply_drag_preview(context)
+	local drag =
+		context.drag_state
+
+	local nodes =
+		ensure_drag_preview(context)
+
+	if not drag
+		or not drag.active
+		or not drag.preview
+	then
+		gui.set_visible(
+			nodes.background,
+			false
+		)
+
+		gui.set_visible(
+			nodes.label,
+			false
+		)
+
+		gui.set_enabled(
+			nodes.background,
+			false
+		)
+
+		gui.set_enabled(
+			nodes.label,
+			false
+		)
+
+		return
+	end
+
+	local preview =
+		drag.preview
+
+	local width =
+		preview.width
+		or context.defaults.drag_preview_width
+
+	local height =
+		preview.height
+		or context.defaults.drag_preview_height
+
+	local offset_x =
+		preview.offset_x
+		or context.defaults.drag_preview_offset_x
+
+	local offset_y =
+		preview.offset_y
+		or context.defaults.drag_preview_offset_y
+
+	-- Our UI coordinates are top-left oriented.
+	local x =
+		drag.x + offset_x
+
+	local y =
+		drag.y - offset_y
+
+	local background_color =
+		preview.background_color
+		or context.defaults.drag_preview_background_color
+
+	if drag.target_id
+		and preview.valid_target_color
+	then
+		background_color = preview.valid_target_color
+	end
+
+	local text_color =
+		preview.text_color
+		or context.defaults.drag_preview_text_color
+
+	-- --------------------------------------------------------
+	-- Background
+	-- --------------------------------------------------------
+
+	gui.set_position(
+		nodes.background,
+		vmath.vector3(
+			x,
+			y,
+			0
+		)
+	)
+
+	gui.set_size(
+		nodes.background,
+		vmath.vector3(
+			width,
+			height,
+			0
+		)
+	)
+
+	gui.set_color(
+		nodes.background,
+		background_color
+	)
+
+	gui.set_visible(
+		nodes.background,
+		true
+	)
+
+	gui.set_enabled(
+		nodes.background,
+		true
+	)
+
+	-- --------------------------------------------------------
+	-- Text
+	-- --------------------------------------------------------
+
+	gui.set_text(
+		nodes.label,
+		preview.text or ""
+	)
+
+	gui.set_position(
+		nodes.label,
+		vmath.vector3(
+			x + width * 0.5,
+			y - height * 0.5,
+			0
+		)
+	)
+
+	gui.set_color(
+		nodes.label,
+		text_color
+	)
+
+	if preview.font then
+		gui.set_font(
+			nodes.label,
+			preview.font
+		)
+	elseif context.defaults.font then
+		gui.set_font(
+			nodes.label,
+			context.defaults.font
+		)
+	end
+
+	gui.set_visible(
+		nodes.label,
+		true
+	)
+
+	gui.set_enabled(
+		nodes.label,
+		true
+	)
+
+	-- Keep the ghost above the normal UI.
+	--
+	-- This runs AFTER the normal root render-order pass.
+	gui.move_above(
+		nodes.background,
+		nil
+	)
+
+	if context.top_root_node then
+		gui.move_above(
+			nodes.background,
+			context.top_root_node
+		)
+	end
+
+	gui.move_above(
+		nodes.label,
+		nodes.background
+	)
 end
 
 local function apply_box(context, command, node, applied, color)
@@ -776,18 +1002,20 @@ end
 
 local function apply_render_order(context)
 	local root_group =
-	context.current_render_groups[ROOT_GROUP]
+		context.current_render_groups[ROOT_GROUP]
 
-	if not root_group or root_group.count == 0 then
+	context.top_root_node = nil
+
+	if not root_group
+		or root_group.count == 0
+	then
 		return
 	end
 
-	-- Only reorder root-level nodes.
-	--
-	-- Do not reorder nodes parented beneath scroll clippers.
-	-- Their parent hierarchy already provides the correct
-	-- draw order and stencil relationship.
-	gui.move_below(root_group.nodes[1], nil)
+	gui.move_below(
+		root_group.nodes[1],
+		nil
+	)
 
 	for index = 2, root_group.count do
 		gui.move_above(
@@ -795,6 +1023,9 @@ local function apply_render_order(context)
 			root_group.nodes[index - 1]
 		)
 	end
+
+	context.top_root_node =
+		root_group.nodes[root_group.count]
 end
 
 local function clear_current_render_groups(context)
@@ -875,7 +1106,11 @@ function M.apply(context)
 	end
 
 	remove_stale_widgets(context)
+
 	apply_render_order(context)
+
+	-- Must happen after normal UI ordering.
+	apply_drag_preview(context)
 end
 
 function M.destroy(context)
@@ -889,6 +1124,22 @@ function M.destroy(context)
 	context.scroll_states = {}
 	context.last_render_groups = {}
 	context.current_render_groups = {}
+
+	if context.drag_preview_nodes then
+		if context.drag_preview_nodes.background then
+			gui.delete_node(
+				context.drag_preview_nodes.background
+			)
+		end
+
+		if context.drag_preview_nodes.label then
+			gui.delete_node(
+				context.drag_preview_nodes.label
+			)
+		end
+
+		context.drag_preview_nodes = nil
+	end
 end
 
 return M

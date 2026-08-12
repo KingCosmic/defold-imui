@@ -43,6 +43,36 @@ function M.create(options)
 		drag_start_scroll_y = 0,
 		drag_threshold = options.drag_threshold or 8,
 
+		drag_sources = {},
+		drag_source_order = {},
+		drag_source_order_count = 0,
+
+		drop_targets = {},
+		drop_target_order = {},
+		drop_target_order_count = 0,
+
+		drop_events = {},
+
+		drag_source_candidate_id = nil,
+
+		drag_state = {
+			active = false,
+
+			source_id = nil,
+			target_id = nil,
+
+			type = nil,
+			payload = nil,
+
+			preview = nil,
+
+			start_x = 0,
+			start_y = 0,
+
+			x = 0,
+			y = 0,
+		},
+
 		hovered_scrollbar_id = nil,
 		scrollbar_drag_id = nil,
 		scrollbar_drag_offset_y = 0,
@@ -107,6 +137,26 @@ function M.create(options)
 			scrollbar_thumb_pressed_color =
 				options.scrollbar_thumb_pressed_color
 				or vmath.vector4(0.82, 0.84, 0.92, 1),
+
+			drag_preview_offset_x =
+				options.drag_preview_offset_x or 14,
+
+			drag_preview_offset_y =
+				options.drag_preview_offset_y or 14,
+
+			drag_preview_width =
+				options.drag_preview_width or 140,
+
+			drag_preview_height =
+				options.drag_preview_height or 42,
+
+			drag_preview_background_color =
+				options.drag_preview_background_color
+				or vmath.vector4(0.12, 0.13, 0.17, 0.92),
+
+			drag_preview_text_color =
+				options.drag_preview_text_color
+				or vmath.vector4(1, 1, 1, 1),
 		},
 	}
 end
@@ -116,6 +166,7 @@ function M.begin_commands(context)
 	context.container_stack_count = 0
 	clear_map(context.current_ids)
 	clear_map(context.clicked_ids)
+	clear_map(context.drop_events)
 end
 
 function M.acquire_command(context)
@@ -167,6 +218,8 @@ function M.acquire_command(context)
 	command.grid_cell_height = 0
 	command.grid_column_gap = 0
 	command.grid_row_gap = 0
+	command.drag_source = nil
+	command.drop_target = nil
 
 	return command
 end

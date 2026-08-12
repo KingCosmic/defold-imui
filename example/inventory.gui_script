@@ -207,7 +207,8 @@ local function draw_action_button(
 end
 
 local function draw_item_slot(self, item)
-	local selected = self.selected_item_id == item.id
+	local selected =
+		self.selected_item_id == item.id
 
 	local label = string.format(
 		"%s\nx%d",
@@ -215,25 +216,62 @@ local function draw_item_slot(self, item)
 		item.quantity
 	)
 
-	if ui.button("item:" .. item.id, label, {
-		width = "fill",
-		height = "fill",
+	if ui.button(
+		"item:" .. item.id,
+		label,
+		{
+			width = "fill",
+			height = "fill",
 
-		background_color = selected
-			and SLOT_SELECTED
-			or SLOT_BACKGROUND,
+			background_color =
+				selected
+				and SLOT_SELECTED
+				or SLOT_BACKGROUND,
 
-		hover_color = selected
-			and SLOT_SELECTED_HOVER
-			or SLOT_HOVER,
+			hover_color =
+				selected
+				and SLOT_SELECTED_HOVER
+				or SLOT_HOVER,
 
-		pressed_color = selected
-			and SLOT_SELECTED
-			or SLOT_BACKGROUND,
+			padding_x = 6,
+			padding_y = 6,
 
-		padding_x = 6,
-		padding_y = 6,
-	}) then
+			drag_source = {
+				type = "inventory_item",
+				payload = item.id,
+
+				preview = {
+					text = string.format(
+						"%s  x%d",
+						item.name,
+						item.quantity
+					),
+
+					width = 170,
+					height = 46,
+
+					background_color =
+						vmath.vector4(
+							0.16,
+							0.17,
+							0.22,
+							0.94
+						),
+
+					valid_target_color =
+						vmath.vector4(
+							0.18,
+							0.34,
+							0.23,
+							0.96
+						),
+
+					text_color =
+						TEXT_PRIMARY,
+				},
+			},
+		}
+	) then
 		if selected then
 			self.selected_item_id = nil
 		else
@@ -247,18 +285,55 @@ local function draw_container_panel(self, config)
 
 	local items = get_container_items(self, config.container_id)
 
+	local drag_over = ui.is_drag_over(config.id)
+
 	ui.begin_column(config.id, {
 		width = "fill",
 		height = "fill",
-		grow = config.grow or 1,
+		grow =
+		config.grow == nil
+			and 1
+			or config.grow,
 
 		padding = 10,
 		gap = 8,
 
 		background_color =
-			config.background_color
-			or PANEL_BACKGROUND,
+			drag_over
+				and vmath.vector4(
+					0.12,
+					0.18,
+					0.14,
+					1
+				)
+				or PANEL_BACKGROUND,
+
+		drop_target = {
+			accept = "inventory_item",
+		},
 	})
+
+	local drop =
+		ui.current_drop()
+
+	if drop then
+		local item =
+			self.items[drop.payload]
+
+		if item
+			and item.container_id
+				~= config.container_id
+		then
+			transfer_item(
+				self,
+				item.id,
+				config.container_id
+			)
+
+			self.selected_item_id =
+				item.id
+		end
+	end
 
 	-- Header
 	ui.begin_row("header", {

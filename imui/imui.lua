@@ -11,6 +11,386 @@ local function require_current()
 	return CURRENT
 end
 
+local function point_in_rect(x, y, left, top, width, height)
+	return x >= left and x <= left + width and y <= top and y >= top - height
+end
+
+local function clear_drag_regions(context)
+	context_module.clear_map(
+		context.drag_sources
+	)
+
+	context_module.clear_map(
+		context.drop_targets
+	)
+
+	for index = 1, context.drag_source_order_count do
+		context.drag_source_order[index] = nil
+	end
+
+	for index = 1, context.drop_target_order_count do
+		context.drop_target_order[index] = nil
+	end
+
+	context.drag_source_order_count = 0
+	context.drop_target_order_count = 0
+end
+
+local function add_drag_source(
+	context,
+	command,
+	x,
+	y,
+	width,
+	height
+)
+	local spec = command.drag_source
+
+	if not spec then
+		return
+	end
+
+	local source = context.drag_sources[command.id]
+
+	if not source then
+		source = {}
+		context.drag_sources[command.id] = source
+	end
+
+	source.id = command.id
+	source.type = spec.type
+	source.payload = spec.payload
+
+	source.preview = spec.preview
+
+	source.x = x
+	source.y = y
+	source.width = width
+	source.height = height
+
+	source.enabled =
+		width > 0
+		and height > 0
+
+	if source.enabled then
+		context.drag_source_order_count =
+			context.drag_source_order_count + 1
+
+		context.drag_source_order[
+			context.drag_source_order_count
+		] = command.id
+	end
+end
+
+local function add_drop_target(
+	context,
+	command,
+	x,
+	y,
+	width,
+	height
+)
+	local spec = command.drop_target
+
+	if not spec then
+		return
+	end
+
+	local target =
+		context.drop_targets[command.id]
+
+	if not target then
+		target = {}
+		context.drop_targets[command.id] = target
+	end
+
+	target.id = command.id
+	target.accept = spec.accept
+
+	target.x = x
+	target.y = y
+	target.width = width
+	target.height = height
+
+	target.enabled =
+		width > 0
+		and height > 0
+
+	if target.enabled then
+		context.drop_target_order_count =
+			context.drop_target_order_count + 1
+
+		context.drop_target_order[
+			context.drop_target_order_count
+		] = command.id
+	end
+end
+
+local function find_drag_source_at(
+	context,
+	x,
+	y
+)
+	for index =
+		context.drag_source_order_count,
+		1,
+		-1
+	do
+		local id =
+			context.drag_source_order[index]
+
+		local source =
+			context.drag_sources[id]
+
+		if source
+			and source.enabled
+			and point_in_rect(
+				x,
+				y,
+				source.x,
+				source.y,
+				source.width,
+				source.height
+			)
+		then
+			return id
+		end
+	end
+
+	return nil
+end
+
+local function target_accepts_drag(
+	target,
+	drag
+)
+	if not target or not target.enabled then
+		return false
+	end
+
+	local accept = target.accept
+
+	if accept == nil then
+		return true
+	end
+
+	if type(accept) == "string" then
+		return accept == drag.type
+	end
+
+	if type(accept) == "function" then
+		return accept(
+			drag.payload,
+			drag.type,
+			drag.source_id
+		)
+	end
+
+	if type(accept) == "table" then
+		for _, accepted_type in ipairs(accept) do
+			if accepted_type == drag.type then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function find_drop_target_at(
+	context,
+	x,
+	y,
+	drag
+)
+	for index =
+		context.drop_target_order_count,
+		1,
+		-1
+	do
+		local id =
+			context.drop_target_order[index]
+
+		local target =
+			context.drop_targets[id]
+
+		if target
+			and point_in_rect(
+				x,
+				y,
+				target.x,
+				target.y,
+				target.width,
+				target.height
+			)
+			and target_accepts_drag(
+				target,
+				drag
+			)
+		then
+			return id
+		end
+	end
+
+	return nil
+end
+
+local function try_start_drag_source(
+	context,
+	x,
+	y
+)
+	local candidate_id =
+		context.drag_source_candidate_id
+
+	if not context.pointer_down
+		or not candidate_id
+	then
+		return false
+	end
+
+	local delta_x =
+		x - context.pointer_press_x
+
+	local delta_y =
+		y - context.pointer_press_y
+
+	local distance_squared =
+		delta_x * delta_x
+		+ delta_y * delta_y
+
+	if distance_squared
+		< context.drag_threshold
+			* context.drag_threshold
+	then
+		return false
+	end
+
+	local source =
+		context.drag_sources[candidate_id]
+
+	if not source then
+		return false
+	end
+
+	local drag =
+		context.drag_state
+
+	drag.active = true
+	drag.source_id = source.id
+	drag.target_id = nil
+
+	drag.type = source.type
+	drag.payload = source.payload
+
+	local preview = source.preview
+
+	if type(preview) == "function" then
+		preview = preview(
+			source.payload,
+			source.type,
+			source.id
+		)
+	end
+
+	drag.preview = preview
+
+	drag.start_x =
+		context.pointer_press_x
+
+	drag.start_y =
+		context.pointer_press_y
+
+	drag.x = x
+	drag.y = y
+
+	-- Item drag wins over button click and
+	-- scroll-content dragging.
+	context.active_id = nil
+
+	context.drag_scroll_id = nil
+	context.drag_scroll_candidate_id = nil
+
+	return true
+end
+
+local function update_drag_source(
+	context,
+	x,
+	y
+)
+	local drag =
+		context.drag_state
+
+	if not drag.active then
+		return
+	end
+
+	drag.x = x
+	drag.y = y
+
+	drag.target_id =
+		find_drop_target_at(
+			context,
+			x,
+			y,
+			drag
+		)
+end
+
+local function finish_drag_source(
+	context,
+	x,
+	y
+)
+	local drag =
+		context.drag_state
+
+	if not drag.active then
+		return false
+	end
+
+	update_drag_source(
+		context,
+		x,
+		y
+	)
+
+	local target_id =
+		drag.target_id
+
+	if target_id then
+		context.drop_events[target_id] = {
+			source_id =
+				drag.source_id,
+
+			target_id =
+				target_id,
+
+			type =
+				drag.type,
+
+			payload =
+				drag.payload,
+
+			x = x,
+			y = y,
+		}
+	end
+
+	drag.active = false
+	drag.source_id = nil
+	drag.target_id = nil
+	drag.type = nil
+	drag.payload = nil
+
+	drag.preview = nil
+
+	context.drag_source_candidate_id = nil
+
+	return true
+end
+
 local function clamp(value, minimum, maximum)
 	if value < minimum then
 		return minimum
@@ -19,10 +399,6 @@ local function clamp(value, minimum, maximum)
 		return maximum
 	end
 	return value
-end
-
-local function point_in_rect(x, y, left, top, width, height)
-	return x >= left and x <= left + width and y <= top and y >= top - height
 end
 
 local function intersect_rect(ax, ay, aw, ah, bx, by, bw, bh)
@@ -246,13 +622,12 @@ local function process_input(context)
 
 		local hovered_scrollbar =
 		find_scrollbar_thumb_at(
-		context,
-		event.x,
-		event.y
-	)
+			context,
+			event.x,
+			event.y
+		)
 
-		context.hovered_scrollbar_id =
-		hovered_scrollbar
+		context.hovered_scrollbar_id = hovered_scrollbar
 
 		if hovered_scrollbar then
 			context.hovered_id = nil
@@ -268,18 +643,41 @@ local function process_input(context)
 	if event.type == "moved" then
 		if context.scrollbar_drag_id then
 			update_scrollbar_drag(
-			context,
-			event.x,
-			event.y
-		)
-	else
-		update_drag(
-		context,
-		event.x,
-		event.y
-	)
-	end
+				context,
+				event.x,
+				event.y
+			)
 
+		elseif context.drag_state.active then
+			update_drag_source(
+				context,
+				event.x,
+				event.y
+			)
+
+		elseif context.drag_source_candidate_id then
+			local started =
+				try_start_drag_source(
+					context,
+					event.x,
+					event.y
+				)
+
+			if started then
+				update_drag_source(
+					context,
+					event.x,
+					event.y
+				)
+			end
+
+		else
+			update_drag(
+				context,
+				event.x,
+				event.y
+			)
+		end
 	elseif event.type == "pressed" then
 		context.pointer_down = true
 		context.pointer_press_x = event.x
@@ -305,8 +703,14 @@ local function process_input(context)
 			context.drag_scroll_candidate_id = nil
 		else
 			context.scrollbar_drag_id = nil
-			context.active_id =
-			context.hovered_id
+			context.active_id = context.hovered_id
+
+			context.drag_source_candidate_id =
+				find_drag_source_at(
+					context,
+					event.x,
+					event.y
+				)
 
 			local scroll_id =
 			find_scroll_at(
@@ -342,18 +746,29 @@ local function process_input(context)
 		end
 
 	elseif event.type == "released" then
+		local was_item_drag = context.drag_state.active
+
+		if was_item_drag then
+			finish_drag_source(
+				context,
+				event.x,
+				event.y
+			)
+		end
+
 		local was_scrollbar_drag =
 			context.scrollbar_drag_id ~= nil
 
 		if not context.drag_scroll_id
-		and not was_scrollbar_drag
+			and not context.scrollbar_drag_id
+			and not was_item_drag
 		then
 			if context.active_id
-			and context.active_id
-			== context.hovered_id
+				and context.active_id
+					== context.hovered_id
 			then
 				context.clicked_ids[
-				context.active_id
+					context.active_id
 				] = true
 			end
 		end
@@ -362,8 +777,11 @@ local function process_input(context)
 		context.active_id = nil
 
 		context.scrollbar_drag_id = nil
+
 		context.drag_scroll_id = nil
 		context.drag_scroll_candidate_id = nil
+
+		context.drag_source_candidate_id = nil
 
 		elseif event.type == "wheel" then
 			local scroll_id =
@@ -429,6 +847,8 @@ local function declare(kind, local_id, style)
 	command.kind = kind
 	command.parent = parent
 	command.style = style or EMPTY_STYLE
+	command.drag_source = command.style.drag_source
+	command.drop_target = command.style.drop_target
 	command.outer_clip_id = parent.clip_id
 
 	if kind == "scroll" then
@@ -451,6 +871,8 @@ local function begin_container(local_id, direction, style)
 end
 
 local function rebuild_interaction_regions(context)
+	clear_drag_regions(context)
+
 	for index = 1, context.hit_order_count do
 		context.hit_order[index] = nil
 	end
@@ -467,6 +889,36 @@ local function rebuild_interaction_regions(context)
 		local style = command.style
 		local enabled = style.enabled ~= false
 		local visible = style.visible ~= false
+
+		local region_x, region_y, region_width, region_height =
+			clipped_rect(
+				context,
+				command.layout_x,
+				command.layout_y,
+				command.layout_width,
+				command.layout_height,
+				command.clip_id
+			)
+
+		if enabled and visible then
+			add_drag_source(
+				context,
+				command,
+				region_x,
+				region_y,
+				region_width,
+				region_height
+			)
+
+			add_drop_target(
+				context,
+				command,
+				region_x,
+				region_y,
+				region_width,
+				region_height
+			)
+		end
 
 		if command.kind == "scroll" then
 			local state = command.scroll_state
@@ -772,6 +1224,48 @@ end
 
 function M.get_scroll(context, id)
 	return context.scroll_states[id]
+end
+
+function M.get_drag()
+	local context =
+		require_current()
+
+	if context.drag_state.active then
+		return context.drag_state
+	end
+
+	return nil
+end
+
+function M.is_drag_over(id)
+	local context =
+		require_current()
+
+	local parent =
+		context_module.current_container(
+			context
+		)
+
+	local resolved =
+		resolve_id(parent, id)
+
+	return context.drag_state.active
+		and context.drag_state.target_id
+			== resolved
+end
+
+function M.current_drop()
+	local context =
+		require_current()
+
+	local container =
+		context_module.current_container(
+			context
+		)
+
+	return context.drop_events[
+		container.id
+	]
 end
 
 return M
