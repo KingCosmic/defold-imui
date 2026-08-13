@@ -106,6 +106,7 @@ local function add_drop_target(
 
 	target.id = command.id
 	target.accept = spec.accept
+	target.payload = spec.payload
 
 	target.x = x
 	target.y = y
@@ -360,18 +361,21 @@ local function finish_drag_source(
 		drag.target_id
 
 	if target_id then
+		local target =
+		context.drop_targets[target_id]
+
 		context.drop_events[target_id] = {
-			source_id =
-				drag.source_id,
+			source_id = drag.source_id,
+			target_id = target_id,
 
-			target_id =
-				target_id,
+			type = drag.type,
 
-			type =
-				drag.type,
+			-- What was dragged.
+			payload = drag.payload,
 
-			payload =
-				drag.payload,
+			-- What it was dropped onto.
+			target_payload =
+			target and target.payload or nil,
 
 			x = x,
 			y = y,
@@ -1252,6 +1256,21 @@ function M.is_drag_over(id)
 	return context.drag_state.active
 		and context.drag_state.target_id
 			== resolved
+end
+
+function M.get_drop(id)
+	local context =
+		require_current()
+
+	local parent =
+		context_module.current_container(
+			context
+		)
+
+	local resolved =
+		resolve_id(parent, id)
+
+	return context.drop_events[resolved]
 end
 
 function M.current_drop()

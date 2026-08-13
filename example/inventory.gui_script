@@ -27,19 +27,278 @@ local TEXT_SECONDARY = vmath.vector4(0.65, 0.68, 0.75, 1)
 -- Demo inventory data
 -- ---------------------------------------------------------------------------
 
-local function add_item(self, container_id, name, quantity)
-	self.next_item_id = self.next_item_id + 1
+local function create_container(id, name, capacity)
+	local container = {
+		id = id,
+		name = name,
+		capacity = capacity,
+
+		-- slot index -> item id
+		slots = {},
+
+		-- Persistent payloads so we don't allocate a table
+		-- for every slot every frame.
+		slot_payloads = {},
+	}
+
+	for index = 1, capacity do
+		container.slot_payloads[index] = {
+			container_id = id,
+			slot_index = index,
+		}
+	end
+
+	return container
+end
+
+
+local function get_item(self, item_id)
+	return item_id and self.items[item_id] or nil
+end
+
+
+local function get_item_in_slot(self, container_id, slot_index)
+	local container = self.containers[container_id]
+
+	if not container then
+		return nil
+	end
+
+	return get_item(
+		self,
+		container.slots[slot_index]
+	)
+end
+
+
+local function get_container_count(container)
+	local count = 0
+
+	for index = 1, container.capacity do
+		if container.slots[index] then
+			count = count + 1
+		end
+	end
+
+	return count
+end
+
+
+local function find_free_slot(container)
+	for index = 1, container.capacity do
+		if not container.slots[index] then
+			return index
+		end
+	end
+
+	return nil
+end
+
+
+local function add_item(
+	self,
+	container_id,
+	name,
+	quantity,
+	slot_index
+)
+	local container =
+		self.containers[container_id]
+
+	if not container then
+		return nil
+	end
+
+	slot_index =
+		slot_index
+		or find_free_slot(container)
+
+	if not slot_index then
+		return nil
+	end
+
+	if container.slots[slot_index] then
+		return nil
+	end
+
+	self.next_item_id =
+		self.next_item_id + 1
 
 	local item = {
 		id = self.next_item_id,
-		container_id = container_id,
+
 		name = name,
 		quantity = quantity or 1,
+
+		container_id = container_id,
+		slot_index = slot_index,
 	}
 
 	self.items[item.id] = item
 
+	container.slots[slot_index] =
+		item.id
+
 	return item
+end
+
+local function move_item_to_slot(
+	self,
+	item_id,
+	destination_container_id,
+	destination_slot_index
+)
+	local item =
+		self.items[item_id]
+
+	if not item then
+		return false
+	end
+
+	local source_container =
+		self.containers[item.container_id]
+
+	local destination_container =
+		self.containers[destination_container_id]
+
+	if not source_container
+		or not destination_container
+	then
+		return false
+	end
+
+	if destination_slot_index < 1
+		or destination_slot_index
+			> destination_container.capacity
+	then
+		return false
+	end
+
+	local source_slot_index =
+		item.slot_index
+
+	-- Dropped directly back onto itself.
+	if item.container_id
+			== destination_container_id
+		and source_slot_index
+			== destination_slot_index
+	then
+		return false
+	end
+
+	local target_item_id =
+		destination_container.slots[
+			destination_slot_index
+		]
+
+	local target_item =
+		target_item_id
+		and self.items[target_item_id]
+		or nil
+
+	-- Vacate the dragged item's old slot first.
+	source_container.slots[
+		source_slot_index
+	] = nil
+
+	-- If the destination is occupied, move that item
+	-- into the dragged item's old slot.
+	if target_item then
+		source_container.slots[
+			source_slot_index
+		] = target_item.id
+
+		target_item.container_id =
+			source_container.id
+
+		target_item.slot_index =
+			source_slot_index
+	end
+
+	-- Put dragged item into destination.
+	destination_container.slots[
+		destination_slot_index
+	] = item.id
+
+	item.container_id =
+		destination_container.id
+
+	item.slot_index =
+		destination_slot_index
+
+	return true
+end
+
+local function move_item_to_container(
+	self,
+	item_id,
+	destination_container_id
+)
+	local container =
+		self.containers[
+			destination_container_id
+		]
+
+	if not container then
+		return false
+	end
+
+	local slot_index =
+		find_free_slot(container)
+
+	if not slot_index then
+		return false
+	end
+
+	return move_item_to_slot(
+		self,
+		item_id,
+		destination_container_id,
+		slot_index
+	)
+end
+
+local function move_all_items(
+	self,
+	source_container_id,
+	destination_container_id
+)
+	local source =
+		self.containers[source_container_id]
+
+	local destination =
+		self.containers[destination_container_id]
+
+	if not source or not destination then
+		return 0
+	end
+
+	local moved = 0
+
+	for slot_index = 1, source.capacity do
+		local item_id =
+			source.slots[slot_index]
+
+		if item_id then
+			local destination_slot =
+				find_free_slot(destination)
+
+			if not destination_slot then
+				break
+			end
+
+			if move_item_to_slot(
+				self,
+				item_id,
+				destination_container_id,
+				destination_slot
+			) then
+				moved = moved + 1
+			end
+		end
+	end
+
+	return moved
 end
 
 local function get_container_items(self, container_id)
@@ -68,49 +327,12 @@ local function get_selected_item(self)
 	return self.items[self.selected_item_id]
 end
 
-local function transfer_item(self, item_id, destination_container_id)
-	local item = self.items[item_id]
-
-	if not item then
-		return false
+local function clear_container(container)
+	for index = 1, container.capacity do
+		container.slots[index] = nil
 	end
-
-	if not self.containers[destination_container_id] then
-		return false
-	end
-
-	if item.container_id == destination_container_id then
-		return false
-	end
-
-	-- Replace this assignment with your container transfer command later:
-	--
-	-- world_commands.queue({
-	--     type = "transfer_item",
-	--     item_id = item_id,
-	--     destination_container_id = destination_container_id,
-	-- })
-	item.container_id = destination_container_id
-
-	return true
 end
 
-local function transfer_all(
-	self,
-	source_container_id,
-	destination_container_id
-)
-	local transferred = 0
-
-	for _, item in pairs(self.items) do
-		if item.container_id == source_container_id then
-			item.container_id = destination_container_id
-			transferred = transferred + 1
-		end
-	end
-
-	return transferred
-end
 
 local function populate_demo(self)
 	self.items = {}
@@ -118,37 +340,135 @@ local function populate_demo(self)
 	self.selected_item_id = nil
 	self.spawn_index = 0
 
-	-- Player inventory
-	add_item(self, "player", "Bandage", 3)
-	add_item(self, "player", "Water", 2)
-	add_item(self, "player", "9mm Ammo", 24)
-	add_item(self, "player", "Canned Beans", 2)
-	add_item(self, "player", "Flashlight", 1)
-	add_item(self, "player", "Batteries", 4)
-	add_item(self, "player", "Pocket Knife", 1)
-	add_item(self, "player", "Ripped Cloth", 6)
-	add_item(self, "player", "Painkillers", 2)
-	add_item(self, "player", "Matches", 8)
-	add_item(self, "player", "Screwdriver", 1)
-	add_item(self, "player", "Empty Bottle", 2)
+	for _, container in pairs(self.containers) do
+		clear_container(container)
+	end
 
-	-- Nearby cabinet/container
-	add_item(self, "container", "Canned Soup", 4)
-	add_item(self, "container", "Cooking Pot", 1)
-	add_item(self, "container", "Duct Tape", 2)
-	add_item(self, "container", "Garbage Bag", 3)
-	add_item(self, "container", "Bleach", 1)
-	add_item(self, "container", "Kitchen Knife", 1)
-	add_item(self, "container", "Salt", 2)
-	add_item(self, "container", "Coffee", 1)
-	add_item(self, "container", "Lighter", 1)
+	-- Backpack
 
-	-- Loose items on the ground
-	add_item(self, "ground", "Loose Nails", 12)
-	add_item(self, "ground", "Wood Plank", 2)
-	add_item(self, "ground", "Dirty Rag", 3)
-	add_item(self, "ground", "Empty Can", 1)
-	add_item(self, "ground", "Shotgun Shells", 6)
+	add_item(
+		self,
+		"player",
+		"Bandage",
+		3,
+		1
+	)
+
+	add_item(
+		self,
+		"player",
+		"Water",
+		2,
+		2
+	)
+
+	add_item(
+		self,
+		"player",
+		"9mm Ammo",
+		24,
+		4
+	)
+
+	add_item(
+		self,
+		"player",
+		"Flashlight",
+		1,
+		7
+	)
+
+	add_item(
+		self,
+		"player",
+		"Pocket Knife",
+		1,
+		8
+	)
+
+	add_item(
+		self,
+		"player",
+		"Painkillers",
+		2,
+		13
+	)
+
+	-- Cabinet
+
+	add_item(
+		self,
+		"container",
+		"Canned Soup",
+		4,
+		1
+	)
+
+	add_item(
+		self,
+		"container",
+		"Cooking Pot",
+		1,
+		2
+	)
+
+	add_item(
+		self,
+		"container",
+		"Duct Tape",
+		2,
+		5
+	)
+
+	add_item(
+		self,
+		"container",
+		"Kitchen Knife",
+		1,
+		8
+	)
+
+	add_item(
+		self,
+		"container",
+		"Coffee",
+		1,
+		11
+	)
+
+	-- Ground
+
+	add_item(
+		self,
+		"ground",
+		"Loose Nails",
+		12,
+		1
+	)
+
+	add_item(
+		self,
+		"ground",
+		"Wood Plank",
+		2,
+		4
+	)
+
+	add_item(
+		self,
+		"ground",
+		"Dirty Rag",
+		3,
+		6
+	)
+
+	add_item(
+		self,
+		"ground",
+		"Shotgun Shells",
+		6,
+		10
+	)
 end
 
 local function spawn_ground_loot(self)
@@ -163,9 +483,16 @@ local function spawn_ground_loot(self)
 		{ "Canned Food", 1 },
 	}
 
-	self.spawn_index = self.spawn_index + 1
+	self.spawn_index =
+		self.spawn_index + 1
 
-	local entry = loot[((self.spawn_index - 1) % #loot) + 1]
+	local entry =
+		loot[
+			(
+				(self.spawn_index - 1)
+				% #loot
+			) + 1
+		]
 
 	add_item(
 		self,
@@ -206,76 +533,179 @@ local function draw_action_button(
 	})
 end
 
-local function draw_item_slot(self, item)
+local function draw_item_slot(
+	self,
+	container,
+	slot_index
+)
+	local slot_id =
+		"slot:" .. slot_index
+
+	local item =
+		get_item_in_slot(
+			self,
+			container.id,
+			slot_index
+		)
+
 	local selected =
-		self.selected_item_id == item.id
+		item
+		and self.selected_item_id
+			== item.id
 
-	local label = string.format(
-		"%s\nx%d",
-		item.name,
-		item.quantity
-	)
+	local drag_over =
+		ui.is_drag_over(slot_id)
 
-	if ui.button(
-		"item:" .. item.id,
-		label,
-		{
-			width = "fill",
-			height = "fill",
+	local background_color =
+		SLOT_BACKGROUND
 
-			background_color =
-				selected
-				and SLOT_SELECTED
-				or SLOT_BACKGROUND,
+	local hover_color =
+		SLOT_HOVER
 
-			hover_color =
-				selected
-				and SLOT_SELECTED_HOVER
-				or SLOT_HOVER,
+	if selected then
+		background_color =
+			SLOT_SELECTED
 
-			padding_x = 6,
-			padding_y = 6,
+		hover_color =
+			SLOT_SELECTED_HOVER
+	end
 
-			drag_source = {
-				type = "inventory_item",
-				payload = item.id,
+	if drag_over then
+		background_color =
+			vmath.vector4(
+				0.18,
+				0.38,
+				0.24,
+				1
+			)
 
-				preview = {
-					text = string.format(
-						"%s  x%d",
-						item.name,
-						item.quantity
-					),
+		hover_color =
+			vmath.vector4(
+				0.22,
+				0.46,
+				0.29,
+				1
+			)
+	end
 
-					width = 170,
-					height = 46,
+	local label = ""
 
-					background_color =
-						vmath.vector4(
-							0.16,
-							0.17,
-							0.22,
-							0.94
-						),
+	if item then
+		label = string.format(
+			"%s\nx%d",
+			item.name,
+			item.quantity
+		)
+	end
 
-					valid_target_color =
-						vmath.vector4(
-							0.18,
-							0.34,
-							0.23,
-							0.96
-						),
+	local clicked =
+		ui.button(
+			slot_id,
+			label,
+			{
+				width = "fill",
+				height = "fill",
 
-					text_color =
-						TEXT_PRIMARY,
+				background_color =
+					background_color,
+
+				hover_color =
+					hover_color,
+
+				pressed_color =
+					background_color,
+
+				padding_x = 5,
+				padding_y = 5,
+
+				-- Occupied slots can be dragged.
+				drag_source =
+					item and {
+						type =
+							"inventory_item",
+
+						payload =
+							item.id,
+
+						preview = {
+							text =
+								string.format(
+									"%s  x%d",
+									item.name,
+									item.quantity
+								),
+
+							width = 170,
+							height = 46,
+
+							background_color =
+								vmath.vector4(
+									0.16,
+									0.17,
+									0.22,
+									0.94
+								),
+
+							valid_target_color =
+								vmath.vector4(
+									0.18,
+									0.34,
+									0.23,
+									0.96
+								),
+
+							text_color =
+								TEXT_PRIMARY,
+						},
+					}
+					or nil,
+
+				-- EVERY slot is a drop target,
+				-- occupied or not.
+				drop_target = {
+					accept =
+						"inventory_item",
+
+					payload =
+						container
+							.slot_payloads[
+								slot_index
+							],
 				},
-			},
-		}
-	) then
-		if selected then
-			self.selected_item_id = nil
+			}
+		)
+
+	if clicked then
+		if item then
+			if selected then
+				self.selected_item_id = nil
+			else
+				self.selected_item_id =
+					item.id
+			end
 		else
-			self.selected_item_id = item.id
+			self.selected_item_id = nil
+		end
+	end
+
+	-- Handle a direct drop onto this slot.
+	local drop =
+		ui.get_drop(slot_id)
+
+	if drop then
+		local target =
+			drop.target_payload
+
+		if target then
+			if move_item_to_slot(
+				self,
+				drop.payload,
+				target.container_id,
+				target.slot_index
+			) then
+				self.selected_item_id =
+					drop.payload
+			end
 		end
 	end
 end
@@ -324,10 +754,10 @@ local function draw_container_panel(self, config)
 			and item.container_id
 				~= config.container_id
 		then
-			transfer_item(
+			move_item_to_container(
 				self,
-				item.id,
-				config.container_id
+				selected.id,
+				action.destination_id
 			)
 
 			self.selected_item_id =
@@ -354,7 +784,7 @@ local function draw_container_panel(self, config)
 
 	ui.text("capacity", string.format(
 		"%d / %d",
-		#items,
+		get_container_count(container),
 		container.capacity
 	), {
 		width = 80,
@@ -398,35 +828,49 @@ local function draw_container_panel(self, config)
 			vmath.vector4(0.82, 0.84, 0.92, 1),
 
 		background_color = VIEWPORT_BACKGROUND,
+
+		drop_target = {
+			accept = "inventory_item",
+			payload = container.id,
+		},
 	})
 
-	if #items == 0 then
-		ui.text("empty", config.empty_text or "Empty", {
-			width = "fill",
-			height = 32,
+	local container_drop =
+		ui.current_drop()
 
-			color = TEXT_SECONDARY,
-		})
-	else
-		ui.begin_grid("slots", {
-			width = "fill",
-
-			columns = config.columns,
-			cell_height = config.cell_height,
-
-			column_gap = 7,
-			row_gap = 7,
-
-			justify_items = "stretch",
-			align_items = "stretch",
-		})
-
-		for _, item in ipairs(items) do
-			draw_item_slot(self, item)
+	if container_drop then
+		if move_item_to_container(
+			self,
+			container_drop.payload,
+			container.id
+		) then
+			self.selected_item_id =
+				container_drop.payload
 		end
-
-		ui.end_container() -- slots
 	end
+
+	ui.begin_grid("slots", {
+		width = "fill",
+
+		columns = config.columns,
+		cell_height = config.cell_height,
+
+		column_gap = 7,
+		row_gap = 7,
+
+		justify_items = "stretch",
+		align_items = "stretch",
+	})
+
+	for slot_index = 1, container.capacity do
+		draw_item_slot(
+			self,
+			container,
+			slot_index
+		)
+	end
+
+	ui.end_container() -- slots
 
 	ui.end_container() -- scroll
 
@@ -478,13 +922,13 @@ local function draw_container_panel(self, config)
 
 		if clicked then
 			if action.mode == "all" then
-				transfer_all(
+				move_all_items(
 					self,
 					config.container_id,
 					action.destination_id
 				)
 			elseif selected_here then
-				transfer_item(
+				move_item_to_container(
 					self,
 					selected.id,
 					action.destination_id
@@ -506,23 +950,26 @@ function init(self)
 	msg.post(".", "acquire_input_focus")
 
 	self.containers = {
-		player = {
-			id = "player",
-			name = "Backpack",
-			capacity = 40,
-		},
+		player =
+			create_container(
+				"player",
+				"Backpack",
+				30
+			),
 
-		container = {
-			id = "container",
-			name = "Kitchen Cabinet",
-			capacity = 24,
-		},
+		container =
+			create_container(
+				"container",
+				"Kitchen Cabinet",
+				20
+			),
 
-		ground = {
-			id = "ground",
-			name = "Nearby Ground",
-			capacity = 100,
-		},
+		ground =
+			create_container(
+				"ground",
+				"Nearby Ground",
+				28
+			),
 	}
 
 	populate_demo(self)
